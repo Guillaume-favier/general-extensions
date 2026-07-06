@@ -3,7 +3,6 @@ import {
   type MangaInfo,
   type PagedResults,
   type SearchResultItem,
-  type SourceManga,
 } from "@paperback/types";
 import * as cheerio from "cheerio";
 import type { Element } from "domhandler";

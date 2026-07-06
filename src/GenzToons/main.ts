@@ -11,7 +11,6 @@
 
 import {
   BasicRateLimiter,
-  DiscoverSectionType,
   type AdvancedSearchForm,
   type Chapter,
   type ChapterDetails,
@@ -106,7 +105,7 @@ export class GenzToonsExtension implements ExtensionImpl<typeof GenzToonsConfig>
   }
 
   // Populates a chapter with images
-  async getChapterDetails(chapter: Chapter): Promise<ChapterDetails> {
+  async getChapterDetails(_chapter: Chapter): Promise<ChapterDetails> {
     throw new Error("No title with this id exists");
   }
 }
