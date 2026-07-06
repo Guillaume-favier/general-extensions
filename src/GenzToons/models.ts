@@ -5,6 +5,8 @@ import type { Tag } from "@paperback/types";
 
 export const DOMAIN = "https://genztoons.org";
 
+export const CDN_URL = "https://cdn.meowing.org/uploads/";
+
 export const MODE_OPTIONS: Tag[] = [
   { id: "include", title: "Include" },
   { id: "exclude", title: "Exclude" },

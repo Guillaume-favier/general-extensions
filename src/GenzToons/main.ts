@@ -30,7 +30,7 @@ import { GenzToonsAdvancedSearchForm, SettingsForm } from "./forms";
 import type { GenzToonsSearchMetadata } from "./models";
 // Extension network file
 import { fetchText, MainInterceptor, makeUrl } from "./network";
-import { parseMangaDetail, parseSearch } from "./parser";
+import { parseChapterPages, parseMangaChapters, parseMangaDetail, parseSearch } from "./parser";
 import type GenzToonsConfig from "./pbconfig";
 
 // Main extension class
@@ -92,7 +92,7 @@ export class GenzToonsExtension implements ExtensionImpl<typeof GenzToonsConfig>
   // Populates the title details
   async getMangaDetails(mangaId: string): Promise<SourceManga> {
     const RAWPage = await fetchText(makeUrl(["series", mangaId]));
-    console.log("fetched");
+
     return {
       mangaId,
       mangaInfo: parseMangaDetail(RAWPage),
@@ -100,13 +100,16 @@ export class GenzToonsExtension implements ExtensionImpl<typeof GenzToonsConfig>
   }
 
   // Populates the chapter list
-  async getChapters(_sourceManga: SourceManga, _sinceDate?: Date): Promise<Chapter[]> {
-    return [];
+  async getChapters(sourceManga: SourceManga, _sinceDate?: Date): Promise<Chapter[]> {
+    const RAWPage = await fetchText(makeUrl(["series", sourceManga.mangaId]));
+    return parseMangaChapters(RAWPage, sourceManga);
   }
 
   // Populates a chapter with images
-  async getChapterDetails(_chapter: Chapter): Promise<ChapterDetails> {
-    throw new Error("No title with this id exists");
+  async getChapterDetails(chapter: Chapter): Promise<ChapterDetails> {
+    const RAWPage = await fetchText(makeUrl(["chapter", chapter.chapterId]));
+    return parseChapterPages(RAWPage, chapter);
+    // throw new Error("No title with this id exists");
   }
 }
 
