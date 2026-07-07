@@ -2,9 +2,10 @@ import {
   ContentRating,
   type Chapter,
   type ChapterDetails,
+  type DiscoverSection,
+  type DiscoverSectionItem,
   type MangaInfo,
   type PagedResults,
-  type SearchResultItem,
   type SourceManga,
   type Tag,
   type TagSection,
@@ -12,20 +13,22 @@ import {
 import * as cheerio from "cheerio";
 import type { Element } from "domhandler";
 
-import { CDN_URL } from "./models";
+import {
+  CDN_URL,
+  type GenzToonsSearchResultItem,
+  type GenzToonsSearchResultMetadata,
+} from "./models";
 
-export const parseSearch = (page: string): PagedResults<SearchResultItem> => {
+export const parseSearch = (page: string): GenzToonsSearchResultItem[] => {
   const $ = cheerio.load(page);
 
-  let results: SearchResultItem[] = [];
+  let results: GenzToonsSearchResultItem[] = [];
 
   const seriesElements = $("#searched_series_page").children();
   console.log("nb of series :", seriesElements.length);
   seriesElements.each((i: number, _el: Element) => {
-    console.log(i);
     const el = seriesElements.eq(i);
-    console.log(el);
-    let sri: SearchResultItem = {
+    let sri: GenzToonsSearchResultItem = {
       title: el.attr("alt") ?? "",
       // TODO: fix this horendous thing
       mangaId: (el.children().first().attr("href") ?? "///").split("/")[2],
@@ -34,15 +37,19 @@ export const parseSearch = (page: string): PagedResults<SearchResultItem> => {
           .attr("style")
           ?.split("url(")[1]
           .split("); ")[0] ?? "",
+      metadata: {
+        slug: el.attr("id")?.trim(),
+        tags: JSON.parse(el.attr("tags")?.trim() ?? "[]"),
+        type: el.attr("data-type")?.trim(),
+        status: el.attr("data-status")?.trim(),
+      } as GenzToonsSearchResultMetadata,
     };
     results.push(sri);
     console.log("pushed", JSON.stringify(sri));
   });
   console.log("finnal length", results.length);
 
-  return {
-    items: results,
-  };
+  return results;
 };
 const textToId = (text: string): string =>
   encodeURIComponent(text).replace(
@@ -118,7 +125,7 @@ export const parseMangaDetail = (page: string): MangaInfo => {
   };
 };
 
-function parseDateString(input: string): Date {
+function parseDateString(input: string, optimiseRelative = true): Date {
   const trimmed = input.trim();
 
   // Match relative formats: "5 days ago", "22 hours ago", "11 minutes ago"
@@ -140,18 +147,14 @@ function parseDateString(input: string): Date {
         break;
       case "hour":
         now.setHours(now.getHours() - amount);
+        if (optimiseRelative) now.setMinutes(0);
         break;
       case "day":
         now.setDate(now.getDate() - amount);
-        break;
-      case "week":
-        now.setDate(now.getDate() - amount * 7);
-        break;
-      case "month":
-        now.setMonth(now.getMonth() - amount);
-        break;
-      case "year":
-        now.setFullYear(now.getFullYear() - amount);
+        if (optimiseRelative) {
+          now.setMinutes(0);
+          now.setHours(0);
+        }
         break;
     }
 
@@ -182,13 +185,11 @@ export const parseMangaChapters = (page: string, sourceManga: SourceManga): Chap
     }
 
     const dateStr = $("span", el).parent().children("div").children().first().text().trim();
+    const pubDate = parseDateString(dateStr, false);
 
-    const pubDate = parseDateString(dateStr);
-
-    console.log(dateStr, pubDate);
     chaps.push({
       volume: 0,
-      chapNum: Number(el.attr("alt")?.trim()?.split(" ")[1] ?? 0) + 1, // "Chapter 5" -> 5
+      chapNum: Number(el.attr("alt")?.trim()?.split(" ")[1] ?? 0), // "Chapter 5" -> 5
       chapterId: el.attr("href")?.trim()?.split("/")[2] ?? "", // "/chapter/6518be2bf4d-654d878d338/" -> "6518be2bf4d-654d878d338"
       publishDate: pubDate,
       sourceManga,
@@ -214,4 +215,77 @@ export const parseChapterPages = (page: string, chapter: Chapter): ChapterDetail
     type: "images",
     pages: pages,
   };
+};
+
+export const parseHomePageFeatured = (
+  page: string,
+  _section?: DiscoverSection,
+): PagedResults<DiscoverSectionItem> => {
+  const $ = cheerio.load(page);
+  const ulList = $("div.grid.relative.z-10.w-full").first().parent().parent().children();
+
+  let items: DiscoverSectionItem[] = [];
+  ulList.each((i: number) => {
+    const el = ulList.eq(i);
+    items.push({
+      type: "featuredCarouselItem",
+      mangaId: el.attr("href")?.trim().split("/")[2] ?? "",
+      title: el.attr("title")?.trim() ?? "",
+      imageUrl: el.children().first().attr("style")?.split("url(")[1]?.split("&w=640")[0] ?? "",
+    });
+  });
+
+  return { items };
+};
+
+export const parseLatest = (
+  page: string,
+  _section?: DiscoverSection,
+): PagedResults<DiscoverSectionItem> => {
+  const $ = cheerio.load(page);
+  let items: DiscoverSectionItem[] = [];
+
+  const latestEls = $("div.grid-cols-1.gap-4").children();
+  latestEls.each((i: number) => {
+    const el = latestEls.eq(i);
+    const chaptersBlock = el.children().last().children().last().children();
+    let latestEl = chaptersBlock.last().children().first();
+
+    items.push({
+      type: "chapterUpdatesCarouselItem",
+      mangaId: el.children().first().attr("href")?.trim().split("/")[2] ?? "",
+      chapterId: latestEl.attr("href")?.trim().split("/")[2] ?? "",
+      imageUrl:
+        el.children().first().attr("style")?.trim()?.split(":url(")[1]?.split("&w=250)")[0] ?? "",
+      title: el.children().first().attr("alt")?.trim() ?? "",
+      subtitle: latestEl.attr("title"),
+      publishDate: parseDateString(latestEl.attr("d")?.trim() ?? ""),
+    });
+  });
+
+  return { items };
+};
+
+export const parseHomePageTrending = (
+  page: string,
+  _section?: DiscoverSection,
+): PagedResults<DiscoverSectionItem> => {
+  let items: DiscoverSectionItem[] = [];
+  const $ = cheerio.load(page);
+  const trendingElements = $("#latest").next().children().last().children().first().children();
+  trendingElements.each((i: number) => {
+    const els = trendingElements.eq(i);
+    const imageElm = els.children().first().children().first().children().first();
+    const image = imageElm.attr("style")?.split("url(")[1]?.split("&w=600);")[0];
+    console.log(image);
+
+    items.push({
+      type: "prominentCarouselItem",
+      mangaId: els.children().first().attr("href")?.split("/")[2] ?? "",
+      imageUrl: image ?? "",
+      title: els.attr("alt") ?? "",
+    });
+  });
+
+  return { items };
 };

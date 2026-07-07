@@ -52,6 +52,8 @@ export function makeUrl(segments: string[], query?: Record<string, string | stri
   segments.forEach((segment) => {
     url.addPathComponent(segment);
   });
+  // if there isn't any "/"" at the end of the query, it redirect to the http url with a "/" then https with a "/"
+  // And because requests from iOS cannot be in http it causes an error
   url.path += "/";
   for (const [key, value] of Object.entries(query ?? {})) {
     url.setQueryItem(key, value);
