@@ -176,6 +176,63 @@ export class GenzToonsExtension implements ExtensionImpl<typeof GenzToonsConfig>
     return new GenzToonsAdvancedSearchForm(query);
   }
 
+  private normalizeSearchText(value: string): string {
+    return value
+      .normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
+  }
+
+  private isTokenMatch(titleToken: string, queryToken: string): boolean {
+    if (!queryToken) return false;
+    if (queryToken.length === 1) {
+      return titleToken.startsWith(queryToken);
+    }
+
+    return (
+      titleToken === queryToken ||
+      titleToken.startsWith(queryToken) ||
+      queryToken.startsWith(titleToken)
+    );
+  }
+
+  private getSearchMatchScore(title: string, query: string): number {
+    const normalizedTitle = this.normalizeSearchText(title);
+    const normalizedQuery = this.normalizeSearchText(query);
+
+    if (!normalizedQuery) return 0;
+    if (normalizedTitle === normalizedQuery) return 10000;
+    if (normalizedTitle.includes(normalizedQuery)) return 9000 + normalizedTitle.length;
+
+    const titleTokens = normalizedTitle.split(/\s+/).filter(Boolean);
+    const queryTokens = normalizedQuery.split(/\s+/).filter(Boolean);
+
+    if (queryTokens.length === 0) return 0;
+
+    const matchedTokens = queryTokens.filter((token) =>
+      titleTokens.some((titleToken) => this.isTokenMatch(titleToken, token)),
+    );
+
+    if (matchedTokens.length !== queryTokens.length) return 0;
+
+    const exactWordMatches = matchedTokens.filter((token) =>
+      titleTokens.some((titleToken) => titleToken === token),
+    ).length;
+    const startsWithMatches = matchedTokens.filter((token) =>
+      titleTokens.some((titleToken) => titleToken.startsWith(token)),
+    ).length;
+
+    let score = matchedTokens.length * 200 + exactWordMatches * 120 + startsWithMatches * 40;
+
+    if (normalizedTitle.startsWith(queryTokens[0])) {
+      score += 300;
+    }
+
+    return score;
+  }
+
   // Populates search
   async getSearchResults(
     query: SearchQuery<GenzToonsSearchMetadata>,
@@ -184,18 +241,19 @@ export class GenzToonsExtension implements ExtensionImpl<typeof GenzToonsConfig>
   ): Promise<PagedResults<SearchResultItem>> {
     await this.ensureSearchCandidateCache();
     const parsed = this.searchCandidateCache!.data.candidates;
-    const searchTerm = query.title?.trim().toLowerCase() ?? "";
+    const searchTerm = query.title?.trim() ?? "";
 
-    if (!searchTerm) {
-      return { items: parsed };
-    }
+    if (!searchTerm) return { items: parsed };
 
     const isExclude = query.metadata?.mode === "exclude";
-    const filtered = parsed.filter((item) => {
-      const title = item.title?.trim().toLowerCase() ?? "";
-      const matches = title.includes(searchTerm);
-      return isExclude ? !matches : matches;
-    });
+    const filtered = parsed
+      .map((item) => ({
+        item,
+        score: this.getSearchMatchScore(item.title ?? "", searchTerm),
+      }))
+      .filter(({ score }) => (isExclude ? score === 0 : score > 0))
+      .sort((a, b) => b.score - a.score)
+      .map(({ item }) => item);
 
     return { items: filtered };
   }
