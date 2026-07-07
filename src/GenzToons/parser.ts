@@ -206,7 +206,8 @@ export const parseChapterPages = (page: string, chapter: Chapter): ChapterDetail
   let pages: string[] = [];
   const pageElems = $("div#pages").children();
   pageElems.each((i: number) => {
-    pages.push(CDN_URL + pageElems.eq(i).attr("uid"));
+    const uid = pageElems.eq(i).attr("uid");
+    if (uid) pages.push(CDN_URL + uid);
   });
 
   return {
