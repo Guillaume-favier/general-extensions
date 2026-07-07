@@ -6,7 +6,7 @@ import { ContentRating, SourceIntents, type ExtensionInfo } from "@paperback/typ
 export default {
   name: "GenzToons",
   description: "Extension that pulls content from genztoons.org.",
-  version: "1.0.0-alpha.1a",
+  version: "1.0.0-alpha.1b",
   icon: "icon.png",
   language: "en",
   contentRating: ContentRating.EVERYONE,

@@ -6,6 +6,7 @@ import {
   type DiscoverSectionItem,
   type MangaInfo,
   type PagedResults,
+  type SearchQuery,
   type SourceManga,
   type Tag,
   type TagSection,
@@ -17,15 +18,29 @@ import {
   CDN_URL,
   type GenzToonsSearchResultItem,
   type GenzToonsSearchResultMetadata,
+  type SearchMetadata,
+  type WebsiteCategory,
 } from "./models";
+import { parseLooseJson } from "./parseLooseJson";
+
+export const parseSelectorsSearch = (page: string): Record<string, WebsiteCategory> => {
+  const $ = cheerio.load(page);
+  const script = $("div.grid.grid-cols-2.gap-2").next("script").toString();
+  let res: Record<string, WebsiteCategory> = {};
+  const firstSplice = script.split("initializeDropdownMenu(");
+  for (const part of firstSplice) {
+    if (!part.startsWith("{")) continue;
+    const obj = parseLooseJson(part.split(");")[0]) as unknown as WebsiteCategory;
+    if (obj["type"]) res[obj["type"]] = obj;
+  }
+  return res;
+};
 
 export const parseSearch = (page: string): GenzToonsSearchResultItem[] => {
   const $ = cheerio.load(page);
-
   let results: GenzToonsSearchResultItem[] = [];
 
   const seriesElements = $("#searched_series_page").children();
-  console.log("nb of series :", seriesElements.length);
   seriesElements.each((i: number, _el: Element) => {
     const el = seriesElements.eq(i);
     let sri: GenzToonsSearchResultItem = {
@@ -45,13 +60,177 @@ export const parseSearch = (page: string): GenzToonsSearchResultItem[] => {
       } as GenzToonsSearchResultMetadata,
     };
     results.push(sri);
-    console.log("pushed", JSON.stringify(sri));
   });
-  console.log("finnal length", results.length);
-
   return results;
 };
-const textToId = (text: string): string =>
+
+const textCache = new Map<string, string>();
+
+const normalizeSearchText = (value: string | undefined): string => {
+  if (!value) return "";
+
+  const cached = textCache.get(value);
+  if (cached !== undefined) return cached;
+
+  const normalized = value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+
+  textCache.set(value, normalized);
+  return normalized;
+};
+
+const isTokenMatch = (titleToken: string, queryToken: string): boolean => {
+  if (!queryToken) return false;
+  if (queryToken.length === 1) {
+    return titleToken.startsWith(queryToken);
+  }
+
+  return (
+    titleToken === queryToken ||
+    titleToken.startsWith(queryToken) ||
+    queryToken.startsWith(titleToken)
+  );
+};
+
+const getSearchMatchScore = (title: string, query: string): number => {
+  const normalizedTitle = normalizeSearchText(title);
+  const normalizedQuery = normalizeSearchText(query);
+
+  if (!normalizedQuery) return 0;
+  if (normalizedTitle === normalizedQuery) return 10000;
+  if (normalizedTitle.includes(normalizedQuery)) return 9000 + normalizedTitle.length;
+
+  const titleTokens = normalizedTitle.split(/\s+/).filter(Boolean);
+  const queryTokens = normalizedQuery.split(/\s+/).filter(Boolean);
+
+  if (queryTokens.length === 0) return 0;
+
+  const matchedTokens = queryTokens.filter((token) =>
+    titleTokens.some((titleToken) => isTokenMatch(titleToken, token)),
+  );
+
+  if (matchedTokens.length !== queryTokens.length) return 0;
+
+  const exactWordMatches = matchedTokens.filter((token) =>
+    titleTokens.some((titleToken) => titleToken === token),
+  ).length;
+  const startsWithMatches = matchedTokens.filter((token) =>
+    titleTokens.some((titleToken) => titleToken.startsWith(token)),
+  ).length;
+
+  let score = matchedTokens.length * 200 + exactWordMatches * 120 + startsWithMatches * 40;
+
+  if (normalizedTitle.startsWith(queryTokens[0])) {
+    score += 300;
+  }
+
+  return score;
+};
+
+const normalizeOptionValue = (value: string | undefined): string => {
+  if (!value) return "";
+
+  try {
+    return normalizeSearchText(decodeURIComponent(value));
+  } catch {
+    return normalizeSearchText(value);
+  }
+};
+
+type NormalizedMetadataFilters = {
+  genres: Array<{ id: string; state: "included" | "excluded" }>;
+  genresMode: "or" | "and";
+  types: string[];
+  statuses: string[];
+};
+
+const buildNormalizedMetadataFilters = (
+  metadata: SearchMetadata | undefined,
+): NormalizedMetadataFilters => ({
+  genres: Object.entries(metadata?.genres ?? {})
+    .map(([genreId, state]) => ({
+      id: normalizeOptionValue(genreId),
+      state: state as "included" | "excluded",
+    }))
+    .filter(({ id }) => id.length > 0),
+  genresMode: metadata?.genresMode === "and" ? "and" : "or",
+  types: (metadata?.types ?? []).map((type) => normalizeOptionValue(type)).filter(Boolean),
+  statuses: (metadata?.status ?? []).map((status) => normalizeOptionValue(status)).filter(Boolean),
+});
+
+const matchesMetadataFilters = (
+  item: GenzToonsSearchResultItem,
+  filters: NormalizedMetadataFilters,
+): boolean => {
+  const itemGenres = new Set(
+    (item.metadata?.tags ?? []).map((tag) => normalizeOptionValue(tag)).filter(Boolean),
+  );
+
+  const includedGenres = filters.genres.filter(({ state }) => state === "included");
+  const excludedGenres = filters.genres.filter(({ state }) => state === "excluded");
+
+  if (includedGenres.length > 0) {
+    const hasIncludedMatch =
+      filters.genresMode === "and"
+        ? includedGenres.every(({ id }) => itemGenres.has(id))
+        : includedGenres.some(({ id }) => itemGenres.has(id));
+
+    if (!hasIncludedMatch) return false;
+  }
+
+  for (const { id, state } of excludedGenres) {
+    const hasGenre = itemGenres.has(id);
+    if (state === "excluded" && hasGenre) return false;
+  }
+
+  if (filters.types.length > 0) {
+    const itemType = normalizeOptionValue(item.metadata?.type);
+    if (!filters.types.includes(itemType)) return false;
+  }
+
+  if (filters.statuses.length > 0) {
+    const itemStatus = normalizeOptionValue(item.metadata?.status);
+    if (!filters.statuses.includes(itemStatus)) return false;
+  }
+
+  return true;
+};
+
+export const filterSearchResults = (
+  items: GenzToonsSearchResultItem[],
+  query: SearchQuery<SearchMetadata>,
+): GenzToonsSearchResultItem[] => {
+  const searchTerm = typeof query.title === "string" ? query.title.trim() : "";
+  const metadata = query.metadata as
+    | (SearchMetadata & { mode?: "include" | "exclude" })
+    | undefined;
+  const hasTitleQuery = searchTerm.length > 0;
+  const isExclude = metadata?.mode === "exclude";
+  const filters = buildNormalizedMetadataFilters(metadata);
+
+  if (!hasTitleQuery) {
+    return items.filter((item) => matchesMetadataFilters(item, filters));
+  }
+
+  const scoredItems: Array<{ item: GenzToonsSearchResultItem; score: number }> = [];
+
+  for (const item of items) {
+    if (!matchesMetadataFilters(item, filters)) continue;
+
+    const score = getSearchMatchScore(item.title ?? "", searchTerm);
+    if (isExclude ? score === 0 : score > 0) {
+      scoredItems.push({ item, score });
+    }
+  }
+
+  return scoredItems.sort((a, b) => b.score - a.score).map(({ item }) => item);
+};
+
+export const textToId = (text: string): string =>
   encodeURIComponent(text).replace(
     /[!'()*~]/g,
     (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase(),
@@ -80,7 +259,7 @@ export const parseMangaDetail = (page: string): MangaInfo => {
     metaTable[name] = el.children().last().text().trim();
   });
 
-  console.log(JSON.stringify(metaTable, null, 4));
+  // console.log(JSON.stringify(metaTable, null, 4));
 
   let genres: Tag[] = [];
   const genresElems = $(
@@ -98,7 +277,7 @@ export const parseMangaDetail = (page: string): MangaInfo => {
     title: "Genres",
     tags: genres,
   };
-  console.log(JSON.stringify(genreObj, null, 4));
+  // console.log(JSON.stringify(genreObj, null, 4));
 
   const image = $('meta[property="og:image"]').attr("content")?.trim();
   const slug: string = image?.split("/uploads/")[1] ?? "";
@@ -278,7 +457,6 @@ export const parseHomePageTrending = (
     const els = trendingElements.eq(i);
     const imageElm = els.children().first().children().first().children().first();
     const image = imageElm.attr("style")?.split("url(")[1]?.split("&w=600);")[0];
-    console.log(image);
 
     items.push({
       type: "prominentCarouselItem",
@@ -286,6 +464,36 @@ export const parseHomePageTrending = (
       imageUrl: image ?? "",
       title: els.attr("alt") ?? "",
     });
+  });
+
+  return { items };
+};
+
+export const parseCategoriesForHomepage = (
+  catId: string,
+  targetsCat: Record<string, string | string[]>[],
+  triState = false,
+): PagedResults<DiscoverSectionItem> => {
+  let items: DiscoverSectionItem[] = [];
+  targetsCat.forEach((target: Record<string, string | string[]>) => {
+    const targets = Array.isArray(target.id) ? target.id : [target.id];
+    const metadataValue = triState
+      ? Object.fromEntries(targets.map((id) => [id, "included" as const]))
+      : targets;
+
+    const sq: SearchQuery<SearchMetadata> = {
+      title: "",
+      metadata: {
+        [catId]: metadataValue,
+        genresMode: "or",
+      } as SearchMetadata,
+    };
+
+    items.push({
+      type: "genresCarouselItem",
+      name: target.title,
+      searchQuery: sq,
+    } as DiscoverSectionItem);
   });
 
   return { items };

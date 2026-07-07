@@ -13,11 +13,15 @@ import {
   NavigationRow,
   Section,
   SelectRow,
+  SelectSection,
   ToggleRow,
+  TriStateSelectRow,
   type SearchQuery,
+  type Tag,
 } from "@paperback/types";
 
-import { MODE_OPTIONS, type GenzToonsSearchMetadata } from "./models";
+import { type SearchMetadata, type WebsiteCategory } from "./models";
+import { textToId } from "./parser";
 
 export class SettingsForm extends Form {
   override getSections() {
@@ -103,36 +107,119 @@ class SourceUIPlaygroundForm extends Form {
 }
 
 export class GenzToonsAdvancedSearchForm extends AdvancedSearchForm {
-  private mode: "include" | "exclude";
+  private genres: Record<string, "included" | "excluded">;
+  private genresMode: ["or" | "and"];
+  private types: string[];
+  private status: string[];
 
-  constructor(searchQuery: SearchQuery<GenzToonsSearchMetadata>) {
+  private readonly genresOptions: Tag[];
+  private readonly typesOptions: Tag[];
+  private readonly statusOptions: Tag[];
+
+  constructor(
+    searchQuery: SearchQuery<SearchMetadata>,
+    searchDetails: Record<"genre" | "type" | "status", WebsiteCategory>,
+  ) {
     super();
-    this.mode = searchQuery.metadata?.mode ?? "include";
+
+    const toTags = (options: WebsiteCategory | undefined): Tag[] =>
+      (options?.items ?? []).map((option) => ({
+        id: textToId(option.value),
+        title: option.displayName,
+      }));
+
+    this.genresOptions = toTags(searchDetails["genre"]);
+    this.typesOptions = toTags(searchDetails["type"]);
+    this.statusOptions = toTags(searchDetails["status"]);
+    console.log(
+      "test",
+      JSON.stringify(searchDetails["type"], null, 4),
+      JSON.stringify(this.typesOptions, null, 4),
+    );
+
+    const meta = searchQuery.metadata ?? {};
+    this.genres = { ...meta.genres };
+    this.genresMode = [meta.genresMode ?? "or"];
+    this.types = meta.types ?? [];
+    this.status = meta.status ?? [];
   }
 
   override getSections() {
     return [
-      Section("filter", [
-        SelectRow("mode", {
-          title: "Search Filter Template",
-          value: [this.mode],
-          options: MODE_OPTIONS,
-          minItemCount: 1,
-          maxItemCount: 1,
+      Section("genres", [
+        TriStateSelectRow("genres", {
+          title: "Genres",
+          layout: "flow",
+          value: this.genres,
+          items: this.genresOptions,
+          allowExclusion: true,
+          allowEmptySelection: true,
           onValueChange: Application.Selector(
             this as GenzToonsAdvancedSearchForm,
-            "handleModeChange",
+            "handleGenresChange",
+          ),
+        }),
+      ]),
+      SelectSection(this, {
+        id: "categories_mode",
+        layout: "flow",
+        value: this.genresMode ?? "or",
+        items: [
+          { id: "and", title: "AND" },
+          { id: "or", title: "OR" },
+        ],
+        minItemCount: 1,
+        maxItemCount: 1,
+      }),
+      Section("types", [
+        SelectRow("types", {
+          title: "Types",
+          value: this.types,
+          options: this.typesOptions,
+          minItemCount: 0,
+          maxItemCount: this.typesOptions.length,
+          onValueChange: Application.Selector(
+            this as GenzToonsAdvancedSearchForm,
+            "handleTypesChange",
+          ),
+        }),
+      ]),
+      Section("status", [
+        SelectRow("status", {
+          title: "Status",
+          value: this.status,
+          options: this.statusOptions,
+          minItemCount: 0,
+          maxItemCount: this.statusOptions.length,
+          onValueChange: Application.Selector(
+            this as GenzToonsAdvancedSearchForm,
+            "handleStatusChange",
           ),
         }),
       ]),
     ];
   }
 
-  async handleModeChange(value: string[]): Promise<void> {
-    this.mode = value[0] === "exclude" ? "exclude" : "include";
+  async handleGenresChange(value: Record<string, "included" | "excluded">): Promise<void> {
+    this.genres = value;
   }
 
-  override getSearchQueryMetadata(): GenzToonsSearchMetadata {
-    return { mode: this.mode };
+  async handleTypesChange(value: string[]): Promise<void> {
+    this.types = value;
+  }
+
+  async handleStatusChange(value: string[]): Promise<void> {
+    this.status = value;
+  }
+
+  override getSearchQueryMetadata(): SearchMetadata {
+    const result: SearchMetadata = {};
+
+    if (Object.keys(this.genres).length > 0) result.genres = this.genres;
+    if (this.genresMode) result.genresMode = this.genresMode[0];
+    if (this.types.length > 0) result.types = this.types;
+    if (this.status.length > 0) result.status = this.status;
+
+    return result;
   }
 }

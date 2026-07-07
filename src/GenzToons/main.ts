@@ -28,10 +28,17 @@ import {
 
 // Extension forms file
 import { GenzToonsAdvancedSearchForm, SettingsForm } from "./forms";
-import type { GenzToonsSearchMetadata, GenzToonsSearchResultItem, Metadata } from "./models";
+import type {
+  GenzToonsSearchResultItem,
+  Metadata,
+  SearchMetadata,
+  WebsiteCategory,
+} from "./models";
 // Extension network file
 import { fetchText, MainInterceptor, makeUrl } from "./network";
 import {
+  filterSearchResults,
+  parseCategoriesForHomepage,
   parseChapterPages,
   parseHomePageFeatured,
   parseHomePageTrending,
@@ -39,6 +46,7 @@ import {
   parseMangaChapters,
   parseMangaDetail,
   parseSearch,
+  parseSelectorsSearch,
 } from "./parser";
 import type GenzToonsConfig from "./pbconfig";
 
@@ -62,7 +70,10 @@ export class GenzToonsExtension implements ExtensionImpl<typeof GenzToonsConfig>
   }
 
   private searchCandidateCache: {
-    data: { candidates: GenzToonsSearchResultItem[] };
+    data: {
+      candidates: GenzToonsSearchResultItem[];
+      categories: Record<"genre" | "type" | "status", WebsiteCategory>;
+    };
     timestamp: number;
   } | null = null;
 
@@ -80,6 +91,7 @@ export class GenzToonsExtension implements ExtensionImpl<typeof GenzToonsConfig>
         timestamp: Date.now(),
         data: {
           candidates: parseSearch(page),
+          categories: parseSelectorsSearch(page),
         },
       };
     }
@@ -151,16 +163,80 @@ export class GenzToonsExtension implements ExtensionImpl<typeof GenzToonsConfig>
     section: DiscoverSection,
     _metadata?: Metadata,
   ): Promise<PagedResults<DiscoverSectionItem>> {
-    await this.ensureHomepageCache();
     switch (section.id) {
       case "featured":
+        await this.ensureHomepageCache();
         return parseHomePageFeatured(this.homepageCache!.data.page, section);
+      case "collections":
+        await this.ensureSearchCandidateCache();
+        const targetCat: Record<string, string | string[]>[] = [
+          { title: "Action", id: "action" },
+          { title: "Drama", id: "drama" },
+          { title: "Adventure", id: "adventure" },
+          { title: "Fantasy", id: "fantasy" },
+          { title: "Shounen", id: "shounen" },
+          { title: "Comedy", id: "comedy" },
+          { title: "Regression", id: "regression" },
+          { title: "Reincarnation", id: "reincarnation" },
+          { title: "Martial Arts", id: "martial%20arts" },
+          { title: "Supernatural", id: "supernatural" },
+          { title: "System", id: "system" },
+          { title: "Isekai", id: "isekai" },
+          { title: "Monsters", id: "monsters" },
+          { title: "School Life", id: "school%20life" },
+          { title: "Magic", id: "magic" },
+          { title: "Slice of Life", id: "slice%20of%20life" },
+          { title: "Sports", id: "sports" },
+          { title: "Time Travel", id: "time%20travel" },
+          { title: "Sci-Fi", id: "sci-fi" },
+          { title: "Revenge", id: "revenge" },
+          { title: "Historical", id: "historical" },
+          { title: "Hunter", id: "hunter" },
+          { title: "Romance & Shoujo", id: ["romance", "shoujo"] },
+          { title: "Murim", id: "murim" },
+          { title: "Delinquents", id: "delinquents" },
+          { title: "Law", id: "law" },
+          { title: "Seinen", id: "seinen" },
+          { title: "Medical", id: "medical" },
+          { title: "Gaming", id: "gaming" },
+          { title: "Political", id: "political" },
+          { title: "Thriller", id: "thriller" },
+          { title: "Psychological", id: "psychological" },
+          { title: "Crime", id: "crime" },
+          { title: "Gang", id: "gang" },
+          { title: "Mystery", id: "mystery" },
+          { title: "Overpowered", id: "overpowered" },
+          { title: "Demons", id: "demons" },
+          { title: "Apocalypse", id: "apocalypse" },
+          { title: "Cultivation", id: "cultivation" },
+          { title: "Shojo", id: "shojo" },
+        ];
+        return parseCategoriesForHomepage("genres", targetCat, true);
       case "latest":
         const RAWPageLatest = await fetchText(makeUrl(["latest"]));
         return parseLatest(RAWPageLatest, section);
       case "trending":
+        await this.ensureHomepageCache();
         return parseHomePageTrending(this.homepageCache!.data.page, section);
-
+      case "types":
+        const targetCatType = [
+          { id: "manhwa", title: "Manhwa" },
+          { id: "manhua", title: "Manhua" },
+          { id: "manga", title: "Manga" },
+          { id: "mangatoon", title: "Mangatoon" },
+          { id: "comic", title: "Comic" },
+        ];
+        await this.ensureSearchCandidateCache();
+        return parseCategoriesForHomepage("types", targetCatType, false);
+      case "status":
+        const targetCatStatus = [
+          { id: "ongoing", title: "Ongoing" },
+          { id: "completed", title: "Completed" },
+          { id: "dropped", title: "Dropped" },
+          { id: "hiatus", title: "Hiatus" },
+        ];
+        await this.ensureSearchCandidateCache();
+        return parseCategoriesForHomepage("status", targetCatStatus, false);
       default:
         break;
     }
@@ -170,92 +246,23 @@ export class GenzToonsExtension implements ExtensionImpl<typeof GenzToonsConfig>
   }
 
   // Populates search filters in a form
-  async getAdvancedSearchForm(
-    query: SearchQuery<GenzToonsSearchMetadata>,
-  ): Promise<AdvancedSearchForm> {
-    return new GenzToonsAdvancedSearchForm(query);
-  }
+  async getAdvancedSearchForm(query: SearchQuery<SearchMetadata>): Promise<AdvancedSearchForm> {
+    await this.ensureSearchCandidateCache();
+    if (!this.searchCandidateCache)
+      throw new Error("no CandidateCache even after this.ensureSearchCandidateCache()");
 
-  private normalizeSearchText(value: string): string {
-    return value
-      .normalize("NFKD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, " ")
-      .trim();
-  }
-
-  private isTokenMatch(titleToken: string, queryToken: string): boolean {
-    if (!queryToken) return false;
-    if (queryToken.length === 1) {
-      return titleToken.startsWith(queryToken);
-    }
-
-    return (
-      titleToken === queryToken ||
-      titleToken.startsWith(queryToken) ||
-      queryToken.startsWith(titleToken)
-    );
-  }
-
-  private getSearchMatchScore(title: string, query: string): number {
-    const normalizedTitle = this.normalizeSearchText(title);
-    const normalizedQuery = this.normalizeSearchText(query);
-
-    if (!normalizedQuery) return 0;
-    if (normalizedTitle === normalizedQuery) return 10000;
-    if (normalizedTitle.includes(normalizedQuery)) return 9000 + normalizedTitle.length;
-
-    const titleTokens = normalizedTitle.split(/\s+/).filter(Boolean);
-    const queryTokens = normalizedQuery.split(/\s+/).filter(Boolean);
-
-    if (queryTokens.length === 0) return 0;
-
-    const matchedTokens = queryTokens.filter((token) =>
-      titleTokens.some((titleToken) => this.isTokenMatch(titleToken, token)),
-    );
-
-    if (matchedTokens.length !== queryTokens.length) return 0;
-
-    const exactWordMatches = matchedTokens.filter((token) =>
-      titleTokens.some((titleToken) => titleToken === token),
-    ).length;
-    const startsWithMatches = matchedTokens.filter((token) =>
-      titleTokens.some((titleToken) => titleToken.startsWith(token)),
-    ).length;
-
-    let score = matchedTokens.length * 200 + exactWordMatches * 120 + startsWithMatches * 40;
-
-    if (normalizedTitle.startsWith(queryTokens[0])) {
-      score += 300;
-    }
-
-    return score;
+    return new GenzToonsAdvancedSearchForm(query, this.searchCandidateCache.data.categories);
   }
 
   // Populates search
   async getSearchResults(
-    query: SearchQuery<GenzToonsSearchMetadata>,
+    query: SearchQuery<SearchMetadata>,
     _metadata?: Metadata,
     _sortingOption?: SortingOption,
   ): Promise<PagedResults<SearchResultItem>> {
     await this.ensureSearchCandidateCache();
     const parsed = this.searchCandidateCache!.data.candidates;
-    const searchTerm = query.title?.trim() ?? "";
-
-    if (!searchTerm) return { items: parsed };
-
-    const isExclude = query.metadata?.mode === "exclude";
-    const filtered = parsed
-      .map((item) => ({
-        item,
-        score: this.getSearchMatchScore(item.title ?? "", searchTerm),
-      }))
-      .filter(({ score }) => (isExclude ? score === 0 : score > 0))
-      .sort((a, b) => b.score - a.score)
-      .map(({ item }) => item);
-
-    return { items: filtered };
+    return { items: filterSearchResults(parsed, query) };
   }
 
   // Populates the title details
