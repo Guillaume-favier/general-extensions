@@ -11,7 +11,6 @@ export default {
   language: "en",
   contentRating: ContentRating.EVERYONE,
   capabilities: [
-    // SourceIntents.SETTINGS_FORM_PROVIDING,
     SourceIntents.CLOUDFLARE_BYPASS_PROVIDING,
     SourceIntents.DISCOVER_SECTION_PROVIDING,
     SourceIntents.SEARCH_RESULT_PROVIDING,

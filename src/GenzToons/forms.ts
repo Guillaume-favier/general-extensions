@@ -131,11 +131,6 @@ export class GenzToonsAdvancedSearchForm extends AdvancedSearchForm {
     this.genresOptions = toTags(searchDetails["genre"]);
     this.typesOptions = toTags(searchDetails["type"]);
     this.statusOptions = toTags(searchDetails["status"]);
-    console.log(
-      "test",
-      JSON.stringify(searchDetails["type"], null, 4),
-      JSON.stringify(this.typesOptions, null, 4),
-    );
 
     const meta = searchQuery.metadata ?? {};
     this.genres = { ...meta.genres };
