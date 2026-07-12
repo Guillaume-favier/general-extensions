@@ -3,18 +3,18 @@
 
 // TODO:
 // - Fix exclude search
-// - Add the English name to the title view
 // - Add additional info to the title view
 // - Make getChapterDetails only return new chapters
 // - Add content settings support to search
-// - Remove the content.json file and switch to cheerio
 
 import {
   BasicRateLimiter,
+  CookieStorageInterceptor,
   DiscoverSectionType,
   type AdvancedSearchForm,
   type Chapter,
   type ChapterDetails,
+  type Cookie,
   type DiscoverSection,
   type DiscoverSectionItem,
   type ExtensionImpl,
@@ -24,6 +24,7 @@ import {
   type SearchResultItem,
   type SortingOption,
   type SourceManga,
+  type Request,
 } from "@paperback/types";
 
 // Extension forms file
@@ -61,11 +62,15 @@ export class GenzToonsExtension implements ExtensionImpl<typeof GenzToonsConfig>
   });
 
   // Implementation of the main interceptor
+
+  // Remembers the `cf_clearance` cookie after a Cloudflare challenge is solved.
+  cookieStorageInterceptor = new CookieStorageInterceptor({ storage: "stateManager" });
   mainInterceptor = new MainInterceptor("main");
 
   // Method from the Extension interface which we implement, initializes the rate limiter, interceptor, discover sections and search filters
   async initialise(): Promise<void> {
     this.mainRateLimiter.registerInterceptor();
+    this.cookieStorageInterceptor.registerInterceptor();
     this.mainInterceptor.registerInterceptor();
   }
 
@@ -286,6 +291,22 @@ export class GenzToonsExtension implements ExtensionImpl<typeof GenzToonsConfig>
     const RAWPage = await fetchText(makeUrl(["chapter", chapter.chapterId]));
     return parseChapterPages(RAWPage, chapter);
     // throw new Error("No title with this id exists");
+  }
+
+  async cloudflareBypassCompleted(
+    _request: Request,
+    cookies: Cookie[],
+    _localStorage: Record<string, string>,
+  ): Promise<void> {
+    for (const cookie of cookies) {
+      if (
+        cookie.name.startsWith("cf") ||
+        cookie.name.startsWith("_cf") ||
+        cookie.name.startsWith("__cf")
+      ) {
+        this.cookieStorageInterceptor.setCookie(cookie);
+      }
+    }
   }
 }
 
