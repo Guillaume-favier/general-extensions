@@ -206,7 +206,7 @@ export const parseSection = (
           subtitle: isMangaData
             ? getArrayAuthor(item as MangaData)
             : `Ch. ${item.latest_chapter_number} | ★ ${item.avg_rating}`,
-          chapterId: item.latest_chapter_number,
+          chapterId: item.latest_chapter_number ?? "",
           publishDate: getDate(item.last_chapter_date),
         };
       case "featuredCarouselItem":
