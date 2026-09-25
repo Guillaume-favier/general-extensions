@@ -4,28 +4,24 @@
 import { ContentRating, SourceIntents, type ExtensionInfo } from "@paperback/types";
 
 export default {
-  name: "LNori",
-  description: "Extension that pulls content from LNori.",
-  version: "1.0.0-alpha.2",
+  name: "HiveToons",
+  description: "Extension that pulls content from hivetoons.org.",
+  version: "1.0.0-alpha.3",
   icon: "icon.png",
   language: "en",
-  contentRating: ContentRating.EVERYONE,
+  contentRating: ContentRating.MATURE,
   capabilities: [
+    SourceIntents.CHAPTER_PROVIDING,
+    SourceIntents.CLOUDFLARE_BYPASS_PROVIDING,
     SourceIntents.DISCOVER_SECTION_PROVIDING,
     SourceIntents.SEARCH_RESULT_PROVIDING,
-    SourceIntents.CHAPTER_PROVIDING,
+    SourceIntents.SETTINGS_FORM_PROVIDING,
   ],
-  badges: [
-    {
-      label: "Novel",
-      textColor: "#ffffff",
-      backgroundColor: "#3baf4b",
-    },
-  ],
+  badges: [],
   developers: [
     {
-      name: "Catta1997",
-      github: "https://github.com/Catta1997",
+      name: "Popmango",
+      github: "https://github.com/PoppingMangoSources",
     },
   ],
 } satisfies ExtensionInfo;
