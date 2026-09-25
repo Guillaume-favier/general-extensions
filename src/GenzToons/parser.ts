@@ -355,8 +355,8 @@ export const parseMangaChapters = (page: string, sourceManga: SourceManga): Chap
   chaptersElems.each((i: number) => {
     const el = chaptersElems.eq(i);
 
-    const imagecontainer = $("div > div:first > div:last", el).children();
-    if (imagecontainer.length >= 2) {
+    const imagecontainer = $("div.grid.h-fit.w-full > div > div.gap-1", el).children();
+    if (imagecontainer.length >= 1) {
       console.log(
         `Chapter ${Number(el.attr("alt")?.trim()?.split(" ")[1] ?? 0)} is a payed chapter and won't be displayed`,
       );
