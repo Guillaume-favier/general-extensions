@@ -134,7 +134,13 @@ export const toSearchResultItem = (
       subtitle += " | " + item.likes.toString() + " ♥";
       break;
     case "latest":
-      subtitle += " | " + getRelativeTime(item.updated);
+      subtitle +=
+        " | " +
+        getRelativeTime(
+          item.chapters && item.chapters.length > 0
+            ? item.chapters[0].release_date
+            : (item.updated ?? item.last_edit),
+        );
       break;
   }
 

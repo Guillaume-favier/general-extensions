@@ -161,7 +161,15 @@ export class FlameComicsExtension implements ExtensionImpl<typeof FlameComicsCon
 
     switch (sortingOption.id) {
       case "latest":
-        candidates.sort((a, b) => (b.updated ?? b.last_edit) - (a.updated ?? a.last_edit));
+        candidates.sort(
+          (a: SortableListItem, b: SortableListItem) =>
+            (b.chapters && b.chapters.length > 0
+              ? b.chapters[0].release_date
+              : (b.updated ?? b.last_edit)) -
+            (a.chapters && a.chapters.length > 0
+              ? a.chapters[0].release_date
+              : (a.updated ?? a.last_edit)),
+        );
         break;
       case "title_asc":
         candidates.sort((a, b) => a.title.localeCompare(b.title));
