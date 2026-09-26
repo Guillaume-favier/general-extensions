@@ -11,7 +11,16 @@ import {
   type SearchQuery,
 } from "@paperback/types";
 
-import { DEMOGRAPHICS, GENRES, STATUSES, THEMES, TYPES, type SearchMetadata } from "../models";
+import {
+  DEMOGRAPHICS,
+  GENRES,
+  STATUSES,
+  THEMES,
+  TYPES,
+  CONTENT_RATINGS,
+  type SearchMetadata,
+} from "../models";
+import { getContentRatings } from "./settings";
 
 export class MangaFireAdvancedSearchForm extends AdvancedSearchForm {
   private genres: Record<string, "included" | "excluded">;
@@ -20,6 +29,7 @@ export class MangaFireAdvancedSearchForm extends AdvancedSearchForm {
   private themes: string[];
   private demographics: string[];
   private statuses: string[];
+  private content_ratings: string[];
   private yearFrom: string;
   private yearTo: string;
   private minChapters: string;
@@ -34,6 +44,7 @@ export class MangaFireAdvancedSearchForm extends AdvancedSearchForm {
     this.themes = meta.themes ?? [];
     this.demographics = meta.demographics ?? [];
     this.statuses = meta.statuses ?? [];
+    this.content_ratings = meta.content_ratings ?? getContentRatings();
     this.yearFrom = meta.yearFrom ?? "";
     this.yearTo = meta.yearTo ?? "";
     this.minChapters = meta.minChapters ?? "";
@@ -47,6 +58,7 @@ export class MangaFireAdvancedSearchForm extends AdvancedSearchForm {
         options: TYPES,
         value: this.types,
         handler: "handleTypesChange",
+        minItemCount: 0,
       },
       {
         id: "themes",
@@ -54,6 +66,7 @@ export class MangaFireAdvancedSearchForm extends AdvancedSearchForm {
         options: THEMES,
         value: this.themes,
         handler: "handleThemesChange",
+        minItemCount: 0,
       },
       {
         id: "demographics",
@@ -61,6 +74,7 @@ export class MangaFireAdvancedSearchForm extends AdvancedSearchForm {
         options: DEMOGRAPHICS,
         value: this.demographics,
         handler: "handleDemographicsChange",
+        minItemCount: 0,
       },
       {
         id: "statuses",
@@ -68,6 +82,15 @@ export class MangaFireAdvancedSearchForm extends AdvancedSearchForm {
         options: STATUSES,
         value: this.statuses,
         handler: "handleStatusesChange",
+        minItemCount: 0,
+      },
+      {
+        id: "contentRatings",
+        title: "Content Ratings",
+        options: CONTENT_RATINGS,
+        value: this.content_ratings,
+        handler: "handleContentRatingsChange",
+        minItemCount: 1,
       },
     ] as const;
 
@@ -95,13 +118,13 @@ export class MangaFireAdvancedSearchForm extends AdvancedSearchForm {
           ),
         }),
       ]),
-      ...selects.map(({ id, title, options, value, handler }) =>
+      ...selects.map(({ id, title, options, value, handler, minItemCount }) =>
         Section(id, [
           SelectRow(id, {
             title,
             value,
             options,
-            minItemCount: 0,
+            minItemCount,
             maxItemCount: options.length,
             onValueChange: Application.Selector(this as MangaFireAdvancedSearchForm, handler),
           }),
@@ -172,6 +195,10 @@ export class MangaFireAdvancedSearchForm extends AdvancedSearchForm {
     this.minChapters = value;
   }
 
+  async handleContentRatingsChange(value: string[]): Promise<void> {
+    this.content_ratings = value;
+  }
+
   override getSearchQueryMetadata(): SearchMetadata {
     const result: SearchMetadata = {};
     if (Object.keys(this.genres).length > 0) result.genres = this.genres;
@@ -180,6 +207,7 @@ export class MangaFireAdvancedSearchForm extends AdvancedSearchForm {
     if (this.themes.length > 0) result.themes = this.themes;
     if (this.demographics.length > 0) result.demographics = this.demographics;
     if (this.statuses.length > 0) result.statuses = this.statuses;
+    if (this.content_ratings.length > 0) result.content_ratings = this.content_ratings;
     if (this.yearFrom.trim()) result.yearFrom = this.yearFrom.trim();
     if (this.yearTo.trim()) result.yearTo = this.yearTo.trim();
     if (this.minChapters.trim()) result.minChapters = this.minChapters.trim();
