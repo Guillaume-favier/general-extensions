@@ -32,6 +32,7 @@ export type SearchMetadata = {
   themes?: string[];
   demographics?: string[];
   statuses?: string[];
+  content_ratings?: string[];
   yearFrom?: string;
   yearTo?: string;
   minChapters?: string;
@@ -87,6 +88,13 @@ export const STATUS_MAP: Record<string, string> = {
   discontinued: "Cancelled",
   not_yet_released: "Not Yet Released",
 };
+
+export const CONTENT_RATINGS: Tag[] = [
+  { id: "safe", title: "Safe" },
+  { id: "suggestive", title: "Suggestive" },
+  { id: "erotica", title: "Erotica" },
+  { id: "pornographic", title: "Pornographic" },
+];
 
 export const ADULT_GENRES = new Set(["Hentai", "Adult", "Smut"]);
 export const MATURE_GENRES = new Set(["Ecchi", "Mature", "Boys Love", "Girls Love"]);

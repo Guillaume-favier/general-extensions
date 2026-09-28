@@ -24,7 +24,7 @@ import {
 } from "@paperback/types";
 
 import { MangaFireAdvancedSearchForm } from "./forms/search";
-import { getLanguages, MangaFireSettingsForm } from "./forms/settings";
+import { getLanguages, getContentRatings, MangaFireSettingsForm } from "./forms/settings";
 import {
   CHAPTER_PAGE_LIMIT,
   DOMAIN,
@@ -239,6 +239,13 @@ class MangaFireExtension implements ExtensionImpl<typeof MangaFireConfig> {
     for (const [key, value] of Object.entries(arrayFilters)) {
       if (value?.length) url.setQueryItem(key, value);
     }
+
+    let content_ratings: string =
+      meta.content_ratings && meta.content_ratings.length > 0
+        ? meta.content_ratings.join(",")
+        : getContentRatings().join(",");
+
+    url.setQueryItem("content_rating", content_ratings);
 
     const valueFilters = {
       year_from: meta.yearFrom,

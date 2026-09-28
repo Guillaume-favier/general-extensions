@@ -3,7 +3,7 @@
 
 import { ButtonRow, Form, LabelRow, Section, SelectRow } from "@paperback/types";
 
-import { BROKEN_CDN_PREFIXES_KEY, CDN_PREFIXES, LANGUAGES } from "../models";
+import { BROKEN_CDN_PREFIXES_KEY, CDN_PREFIXES, LANGUAGES, CONTENT_RATINGS } from "../models";
 
 export function getLanguages(): string[] {
   return (
@@ -17,9 +17,14 @@ export function getBrokenCdnPrefixes(): string[] {
   return (Application.getState(BROKEN_CDN_PREFIXES_KEY) as string[] | undefined) ?? [];
 }
 
+export function getContentRatings(): string[] {
+  return (Application.getState("contentRatings") as string[] | undefined) ?? ["safe", "suggestive"];
+}
+
 export class MangaFireSettingsForm extends Form {
   private languages = getLanguages();
   private brokenCdnPrefixes = getBrokenCdnPrefixes();
+  private contentRatings = getContentRatings();
   private isTestingCdns = false;
 
   override getSections() {
@@ -44,6 +49,29 @@ export class MangaFireSettingsForm extends Form {
           }),
         ],
       ),
+      Section(
+        {
+          id: "contentRatingsContent",
+        },
+        [
+          SelectRow("contentRatings", {
+            title: "Default Content Ratings",
+            subtitle: this.contentRatings
+              .map((id) => CONTENT_RATINGS.find((rating) => rating.id === id)?.title ?? "Unknown")
+              .sort()
+              .join(", "),
+            value: this.contentRatings,
+            minItemCount: 1,
+            maxItemCount: CONTENT_RATINGS.length,
+            options: CONTENT_RATINGS,
+            onValueChange: Application.Selector(
+              this as MangaFireSettingsForm,
+              "handleContentRatingsChange",
+            ),
+          }),
+        ],
+      ),
+
       Section(
         {
           id: "cdn",
@@ -71,6 +99,11 @@ export class MangaFireSettingsForm extends Form {
   async updateLanguages(value: string[]): Promise<void> {
     this.languages = value;
     Application.setState(value, "languages");
+  }
+
+  async handleContentRatingsChange(value: string[]): Promise<void> {
+    this.contentRatings = value;
+    Application.setState(value, "contentRatings");
   }
 
   async testCdns(): Promise<void> {
