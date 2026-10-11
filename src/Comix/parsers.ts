@@ -13,9 +13,8 @@ import * as cheerio from "cheerio";
 import {
   DOMAIN,
   NO_IMAGE,
-  type ApiResponse,
   type ChapterItem,
-  type ChapterPages,
+  type ChapterPageItems,
   type MangaItem,
   type MangaListItem,
   type ResultManga,
@@ -114,14 +113,14 @@ export const parseChapters = (sourceManga: SourceManga, items: ChapterItem[]): C
 
 export function parseChapterDetails(
   chapterId: string,
-  pages: ApiResponse<ChapterPages>,
+  mangaId: string,
+  pages: ChapterPageItems,
 ): ChapterDetails {
-  const { baseUrl, items } = pages.result.pages;
-  const base = (baseUrl ?? "").replace(/\/$/, "");
+  const base = (pages.baseUrl ?? "").replace(/\/$/, "");
   return {
     id: chapterId,
-    mangaId: pages.result.mangaId.toString(),
-    pages: items.map((img) =>
+    mangaId,
+    pages: pages.items.map((img) =>
       img.url.startsWith("http") ? img.url : `${base}/${img.url.replace(/^\//, "")}`,
     ),
   };

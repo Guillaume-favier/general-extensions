@@ -76,9 +76,9 @@ export interface ChapterItem {
   group?: { name: string } | null;
 }
 
-export interface ChapterPages {
-  mangaId: number;
-  pages: { baseUrl: string; items: { url: string }[] };
+export interface ChapterPageItems {
+  baseUrl: string;
+  items: { url: string; width?: number; height?: number }[];
 }
 
 export interface OptionItem {

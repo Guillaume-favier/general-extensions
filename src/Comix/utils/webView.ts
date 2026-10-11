@@ -1,19 +1,20 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright © 2026 Inkdex */
 
-import { type CookieStorageInterceptor } from "@paperback/types";
+import { CloudflareError, type CookieStorageInterceptor } from "@paperback/types";
 import * as cheerio from "cheerio";
 
-import { type ChapterItem, type ResultManga, DOMAIN } from "../models";
+import { DOMAIN, type ChapterItem, type ChapterPageItems, type ResultManga } from "../models";
 import { fetchText } from "../network";
 
-// Loads a Comix page in a WebView and lets the site's own JS run end-to-end:
-// the bundle signs API requests and decrypts `{e:"blob"}` responses internally,
-// then calls JSON.parse on the plaintext. A Proxy on JSON.parse captures that
-// plaintext, so we never need to probe the rotating signer or reimplement the
-// decryption. The WebView runs under the app's default UA (source.userAgent),
-// the same UA cf_clearance is bound to, so the page's own loads + same-origin
-// API XHRs all pass Cloudflare.
+// comix signs its API requests and encrypts `{e:"..."}` responses inside its own
+// secure bundle, so we never reimplement the rotating cipher: we capture the
+// site's own axios instance (which signs + decrypts) to fetch chapter lists, hook
+// `Object.prototype.items` to read a chapter's decoded page list, and hook
+// `JSON.parse` for browse/search. Every request therefore flows through the
+// site's own code, so it looks like normal app traffic and survives its frequent
+// bundle rotations.
+
 async function runProxiedWebView<T>(
   pageUrl: string,
   bootstrap: string,
@@ -37,135 +38,184 @@ async function runProxiedWebView<T>(
   return raw.result as T;
 }
 
-// Capture each chapter fetch's decrypted JSON via JSON.parse and paginate by
-// clicking Next until meta.lastPage. Don't rewrite the request URL — it carries
-// a per-request `_=` signature, so changing limit/params returns 403.
-export async function chapterListViaWebView(
-  mangaId: string,
-  cookieInterceptor: CookieStorageInterceptor,
-): Promise<ChapterItem[]> {
-  const bootstrap = `
-    (function () {
-      var items = [];
-      var seenPages = new Set();
-      var submitted = false;
-      var doneResolve;
-      window.__comixResult__ = new Promise(function (r) {
-        doneResolve = r;
+// Hook `items` assignments, then run `handle(holder)` on the decoded object.
+// Shared by the chapter-list and chapter-pages captures.
+const CAPTURE_ITEMS = `
+  var __comixDefineProperty = Object.defineProperty;
+  var __comixCapture = function (holder) {
+    setTimeout(function () { __comixHandle(holder); }, 0);
+  };
+  Object.defineProperty(Object.prototype, "items", {
+    configurable: true,
+    set: function (value) {
+      __comixDefineProperty(this, "items", {
+        value: value,
+        writable: true,
+        enumerable: true,
+        configurable: true,
       });
-      function submit() {
-        if (submitted) return;
-        submitted = true;
-        doneResolve(items);
-      }
-      var idleTimer;
-      function armIdle() {
-        if (idleTimer) clearTimeout(idleTimer);
-        idleTimer = setTimeout(submit, 20000);
-      }
-      armIdle();
-      function findNextButton(page) {
-        var buttons = Array.prototype.slice.call(document.querySelectorAll('.mchap-foot button'))
-          .filter(function (button) { return !button.disabled; });
-        var nextBtn = buttons.find(function (button) {
-          var label = [
-            button.getAttribute('aria-label'),
-            button.getAttribute('title'),
-            button.textContent
-          ].filter(Boolean).join(' ');
-          return /\bnext\b/i.test(label);
-        });
-        if (nextBtn) return nextBtn;
-        return buttons.find(function (button) {
-          var text = button.textContent ? button.textContent.trim() : "";
-          return Number(text) === page + 1;
-        });
-      }
-      function gotoNext(page) {
-        var tries = 0;
-        var iv = setInterval(function () {
-          var btn = findNextButton(page);
-          if (btn) {
-            btn.click();
-            clearInterval(iv);
-          } else if (++tries > 50) {
-            clearInterval(iv);
-            submit();
-          }
-        }, 100);
-      }
-      var orig = JSON.parse;
-      JSON.parse = new Proxy(orig, {
-        apply: function (t, a, args) {
-          var parsed = Reflect.apply(t, a, args);
-          try {
-            if (
-              !submitted &&
-              parsed &&
-              parsed.result &&
-              Array.isArray(parsed.result.items) &&
-              parsed.result.items[0] &&
-              parsed.result.items[0].id !== undefined &&
-              parsed.result.items[0].mangaId !== undefined
-            ) {
-              var meta = parsed.result.meta || parsed.result.pagination || {};
-              var page = meta.page || 1;
-              if (!seenPages.has(page)) {
-                seenPages.add(page);
-                for (var i = 0; i < parsed.result.items.length; i++) items.push(parsed.result.items[i]);
-                var lastPage = meta.lastPage || meta.last_page || page;
-                var hasNext = meta.hasNext || page < lastPage;
-                if (hasNext) {
-                  armIdle();
-                  gotoNext(page);
-                } else submit();
-              }
-            }
-          } catch {}
-          return parsed;
-        },
-      });
-    })();
-  `;
-  return runProxiedWebView<ChapterItem[]>(
-    `${DOMAIN}/title/${mangaId}`,
-    bootstrap,
-    cookieInterceptor,
-  );
-}
+      __comixCapture(this);
+    },
+  });
+  Object.defineProperty = function (target, key, descriptor) {
+    var result = __comixDefineProperty.apply(this, arguments);
+    if (key === "items" && descriptor && "value" in descriptor) __comixCapture(target);
+    return result;
+  };
+`;
 
+// Capture a chapter's decoded pages object and return it as JSON.
 export async function pageListViaWebView(
   chapterPagePath: string,
   cookieInterceptor: CookieStorageInterceptor,
-): Promise<string> {
+): Promise<ChapterPageItems> {
   const bootstrap = `
-    (function () {
-      var doneResolve;
-      window.__comixResult__ = new Promise(function (r) {
-        doneResolve = r;
-      });
-      var orig = JSON.parse;
-      JSON.parse = new Proxy(orig, {
-        apply: function (t, a, args) {
-          var parsed = Reflect.apply(t, a, args);
-          try {
-            if (parsed && parsed.result && parsed.result.pages) doneResolve(args[0]);
-          } catch {}
-          return parsed;
-        },
-      });
-      setTimeout(function () {
-        doneResolve("");
-      }, 20000);
-    })();
+  (function () {
+    var doneResolve;
+    window.__comixResult__ = new Promise(function (resolve) { doneResolve = resolve; });
+
+    var __comixHandle = function (holder) {
+      try {
+        var items = holder.items;
+        if (holder.meta || !Array.isArray(items) || items.length === 0) return;
+        if (!items.every(function (item) { return item && typeof item.url === "string"; })) return;
+        doneResolve(JSON.stringify(holder));
+      } catch (e) {}
+    };
+
+    ${CAPTURE_ITEMS}
+
+    setTimeout(function () { doneResolve(""); }, 30000);
+  })();
   `;
   const payload = await runProxiedWebView<string>(
     `${DOMAIN}${chapterPagePath}`,
     bootstrap,
     cookieInterceptor,
   );
-  if (!payload) throw new Error("Comix pageListViaWebView: timed out waiting for pages JSON");
-  return payload;
+  if (!payload) {
+    console.log(`[Comix] chapter pages timed out for ${chapterPagePath}`);
+    throw new Error("Comix: timed out waiting for chapter pages");
+  }
+  const pages = JSON.parse(payload) as ChapterPageItems;
+  console.log(`[Comix] chapter pages for ${chapterPagePath}: ${pages.items.length} pages`);
+  return pages;
+}
+
+// Capture the site's own `/api/v1` axios instance (it signs + decrypts for us)
+// the moment it is constructed. Key off `defaults.baseURL` so the vendor's plain
+// default axios instance (no baseURL) is ignored.
+const BOOTSTRAP_AXIOS = `
+(function () {
+  var resolveAxios;
+  window.__comixAxios = null;
+  window.__comixAxiosReady = new Promise(function (resolve) { resolveAxios = resolve; });
+  try {
+    Object.defineProperty(Object.prototype, "interceptors", {
+      configurable: true,
+      get: function () { return this.__pbInterceptors; },
+      set: function (value) {
+        this.__pbInterceptors = value;
+        if (
+          this &&
+          typeof this.get === "function" &&
+          typeof this.post === "function" &&
+          this.defaults &&
+          typeof this.defaults.baseURL === "string" &&
+          this.defaults.baseURL.indexOf("/api/v1") !== -1 &&
+          !window.__comixAxios
+        ) {
+          window.__comixAxios = this;
+          resolveAxios(this);
+        }
+      },
+    });
+  } catch (e) {}
+})();
+`;
+
+function buildChapterListInject(mangaId: string): string {
+  const id = JSON.stringify(mangaId);
+  return `
+return (async function () {
+  var deadline = Date.now() + 45000;
+  while (!window.__comixAxios && Date.now() < deadline) {
+    await new Promise(function (r) { setTimeout(r, 100); });
+  }
+  var axios = window.__comixAxios;
+  if (!axios) return JSON.stringify({ ok: false, status: 503, error: "axios instance not found" });
+
+  var path = "/manga/" + ${id} + "/chapters";
+  var chapters = [];
+  var page = 1;
+  var lastPage = 1;
+  try {
+    while (page <= lastPage && page <= 1000) {
+      var resp = await axios.get(path, { params: { page: page, limit: 100, "order[number]": "desc" } });
+      var data = resp.data || {};
+      chapters = chapters.concat(data.items || []);
+      var meta = data.meta || {};
+      lastPage = meta.lastPage || page;
+      page = page + 1;
+    }
+    return JSON.stringify({ ok: true, items: chapters });
+  } catch (e) {
+    var resp2 = e && e.response;
+    return JSON.stringify({
+      ok: false,
+      status: resp2 && resp2.status,
+      error: String((e && e.message) || e),
+    });
+  }
+})();
+`;
+}
+
+// Load a manga's full chapter list by driving the site's own axios instance
+// directly (limit 100 per page), which is far fewer requests than the app's own
+// `?page=` UI pagination (20 per page) that the WebView capture relied on.
+export async function chapterListViaWebView(
+  mangaId: string,
+  cookieInterceptor: CookieStorageInterceptor,
+): Promise<ChapterItem[]> {
+  const cookies = cookieInterceptor.cookiesForUrl(`${DOMAIN}/`);
+  const userAgent = await Application.getDefaultUserAgent();
+  const pageUrl = `${DOMAIN}/title/${mangaId}`;
+
+  const $ = cheerio.load(await fetchText(pageUrl));
+  $("head").prepend(`<script>${BOOTSTRAP_AXIOS}</script>`);
+
+  const raw = await Application.executeInWebView({
+    source: { html: $.html(), baseUrl: pageUrl, loadCSS: false, loadImages: false, userAgent },
+    inject: buildChapterListInject(mangaId),
+    storage: { cookies },
+  });
+
+  const text = raw.result;
+  if (typeof text !== "string") {
+    throw new Error(`Comix WebView returned unexpected result: ${JSON.stringify(text)}`);
+  }
+  const result = JSON.parse(text) as
+    | { ok: true; items: ChapterItem[] }
+    | { ok: false; status?: number; error: string };
+
+  if (!result.ok) {
+    const status = result.status;
+    console.log(
+      `[Comix] chapter list failed for ${mangaId} (HTTP ${status ?? "?"}): ${result.error}`,
+    );
+    if (status === 403 || status === 404 || status === 429 || status === 503) {
+      throw new CloudflareError({
+        url: DOMAIN,
+        method: "GET",
+        headers: { "user-agent": await Application.getDefaultUserAgent() },
+      });
+    }
+    throw new Error(`Comix chapter list failed for ${mangaId}: ${result.error}`);
+  }
+
+  console.log(`[Comix] chapter list for ${mangaId}: ${result.items.length} chapters`);
+  return result.items;
 }
 
 // `/browse` serves an empty shell and loads its list via an encrypted XHR, so
@@ -216,6 +266,9 @@ export async function browseViaWebView(
     bootstrap,
     cookieInterceptor,
   );
-  if (!result) throw new Error("Comix browseViaWebView: timed out waiting for browse JSON");
+  if (!result) {
+    console.log(`[Comix] browse timed out for ${browseUrl}`);
+    throw new Error("Comix browseViaWebView: timed out waiting for browse JSON");
+  }
   return result;
 }

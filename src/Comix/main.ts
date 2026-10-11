@@ -24,13 +24,7 @@ import {
 
 import { ComixAdvancedSearchForm } from "./forms/search";
 import { ComixSettingsForm, getDiscoverySectionsOrder } from "./forms/settings";
-import {
-  DOMAIN,
-  type ApiResponse,
-  type ChapterPages,
-  type Metadata,
-  type SearchMetadata,
-} from "./models";
+import { DOMAIN, type Metadata, type SearchMetadata } from "./models";
 import { browseUrl, ComixInterceptor, fetchText } from "./network";
 import { parseChapterDetails, parseChapters, parseMangaDetails, parseMangaList } from "./parsers";
 import type ComixConfig from "./pbconfig";
@@ -300,8 +294,8 @@ class ComixExtension implements ExtensionImpl<typeof ComixConfig> {
     if (typeof url !== "string" || !url) {
       throw new Error(`Comix: missing page url for chapter ${chapter.chapterId}`);
     }
-    const payload = await pageListViaWebView(url, this.cookieStorageInterceptor);
-    return parseChapterDetails(chapter.chapterId, JSON.parse(payload) as ApiResponse<ChapterPages>);
+    const pages = await pageListViaWebView(url, this.cookieStorageInterceptor);
+    return parseChapterDetails(chapter.chapterId, chapter.sourceManga.mangaId, pages);
   }
 }
 
