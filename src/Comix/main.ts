@@ -25,13 +25,15 @@ import {
 import { ComixAdvancedSearchForm } from "./forms/search";
 import { ComixSettingsForm, getDiscoverySectionsOrder } from "./forms/settings";
 import {
+  API_BASE,
   DOMAIN,
-  type ApiResponse,
+  type ChapterItem,
   type ChapterPages,
   type Metadata,
+  type ResultManga,
   type SearchMetadata,
 } from "./models";
-import { browseUrl, ComixInterceptor, fetchText } from "./network";
+import { apiUrl, ComixInterceptor, fetchSignedJson, fetchText } from "./network";
 import { parseChapterDetails, parseChapters, parseMangaDetails, parseMangaList } from "./parsers";
 import type ComixConfig from "./pbconfig";
 import {
@@ -49,7 +51,6 @@ import {
   pickTags,
   useYearFilter,
 } from "./utils/filters";
-import { browseViaWebView, chapterListViaWebView, pageListViaWebView } from "./utils/webView";
 
 class ComixExtension implements ExtensionImpl<typeof ComixConfig> {
   private globalRateLimiter = new BasicRateLimiter("rateLimiter", {
@@ -133,8 +134,8 @@ class ComixExtension implements ExtensionImpl<typeof ComixConfig> {
       .filter((section) => section !== undefined);
   }
 
-  // `/api/v1/manga/top` (trending/follows + days window) is now 403 and has no
-  // `/browse` HTML equivalent, so popular/follow map to the closest browse orderings.
+  // `/api/v1/manga/top` (trending/follows + days window) has no `/browse`-equivalent
+  // ordering, so popular/follow map to the closest browse orderings on `/manga`.
   private browseQuery(sectionId: string, page: number) {
     const hidden = [...getHiddenGenres(), ...getHiddenDemographics()];
     const types = getShowOnlyTypes();
@@ -182,7 +183,7 @@ class ComixExtension implements ExtensionImpl<typeof ComixConfig> {
     const page = metadata?.page ?? 1;
     const query = this.browseQuery(section.id, page);
     if (!query) return { items: [] };
-    const result = await browseViaWebView(browseUrl(query), this.cookieStorageInterceptor);
+    const result = await fetchSignedJson<ResultManga>(apiUrl("/manga", { ...query, limit: "20" }));
     const items = parseMangaList(result).map((item): DiscoverSectionItem => {
       const { publishDate, subtitle, supertitle, summary, infoItems, metadata: _, ...base } = item;
       switch (section.type) {
@@ -236,7 +237,7 @@ class ComixExtension implements ExtensionImpl<typeof ComixConfig> {
     for (const [key, values] of Object.entries(tagQueries)) {
       if (values.length > 0) query[key] = values;
     }
-    const result = await browseViaWebView(browseUrl(query), this.cookieStorageInterceptor);
+    const result = await fetchSignedJson<ResultManga>(apiUrl("/manga", { ...query, limit: "20" }));
     const items = parseMangaList(result).map(({ publishDate: _, ...item }) => item);
     const hasNext = result.meta?.hasNext ?? items.length > 0;
     return { items, metadata: hasNext ? { page: page + 1 } : undefined };
@@ -285,23 +286,35 @@ class ComixExtension implements ExtensionImpl<typeof ComixConfig> {
   }
 
   // Details still server-render their data into `<script id="initial-data">`, so
-  // fetch the HTML and let the parser extract it (the JSON API is now 403).
+  // fetch the HTML and let the parser extract it no signing/decrypt needed here.
   async getMangaDetails(mangaId: string): Promise<SourceManga> {
     return parseMangaDetails(mangaId, await fetchText(`${DOMAIN}/title/${mangaId}`));
   }
 
   async getChapters(sourceManga: SourceManga): Promise<Chapter[]> {
-    const items = await chapterListViaWebView(sourceManga.mangaId, this.cookieStorageInterceptor);
+    const mangaId = sourceManga.mangaId;
+    const fetchPage = (page: number) =>
+      fetchSignedJson<{ items: ChapterItem[]; meta?: { lastPage?: number } }>(
+        apiUrl(`/manga/${mangaId}/chapters`, {
+          page: page.toString(),
+          limit: "100",
+          "order[number]": "desc",
+        }),
+      );
+
+    const firstResult = await fetchPage(1);
+    const lastPage = firstResult.meta?.lastPage ?? 1;
+    const restResults =
+      lastPage > 1
+        ? await Promise.all(Array.from({ length: lastPage - 1 }, (_, i) => fetchPage(i + 2)))
+        : [];
+    const items = [...firstResult.items, ...restResults.flatMap((r) => r.items)];
     return parseChapters(sourceManga, items);
   }
 
   async getChapterDetails(chapter: Chapter): Promise<ChapterDetails> {
-    const url = chapter.additionalInfo?.url;
-    if (typeof url !== "string" || !url) {
-      throw new Error(`Comix: missing page url for chapter ${chapter.chapterId}`);
-    }
-    const payload = await pageListViaWebView(url, this.cookieStorageInterceptor);
-    return parseChapterDetails(chapter.chapterId, JSON.parse(payload) as ApiResponse<ChapterPages>);
+    const pages = await fetchSignedJson<ChapterPages>(`${API_BASE}/chapters/${chapter.chapterId}`);
+    return parseChapterDetails(chapter.chapterId, { status: "ok", result: pages });
   }
 }
 

@@ -4,6 +4,7 @@
 import type { SearchResultItem } from "@paperback/types";
 
 export const DOMAIN = "https://comix.to";
+export const API_BASE = `${DOMAIN}/api/v1`;
 export const NO_IMAGE = `${DOMAIN}/images/no-poster.png`;
 
 export type SectionEntry = { id: string; title: string };
