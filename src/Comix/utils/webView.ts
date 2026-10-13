@@ -6,6 +6,7 @@ import * as cheerio from "cheerio";
 
 import { DOMAIN, type ChapterItem, type ChapterPageItems, type ResultManga } from "../models";
 import { fetchText } from "../network";
+import { scheduleComix } from "./queue";
 
 // comix signs its API requests and encrypts `{e:"..."}` responses inside its own
 // secure bundle, so we never reimplement the rotating cipher: we capture the
@@ -20,22 +21,24 @@ async function runProxiedWebView<T>(
   bootstrap: string,
   cookieInterceptor: CookieStorageInterceptor,
 ): Promise<T> {
-  const cookies = cookieInterceptor.cookiesForUrl(`${DOMAIN}/`);
-  const userAgent = await Application.getDefaultUserAgent();
-  const $ = cheerio.load(await fetchText(pageUrl));
+  return scheduleComix(async () => {
+    const cookies = cookieInterceptor.cookiesForUrl(`${DOMAIN}/`);
+    const userAgent = await Application.getDefaultUserAgent();
+    const $ = cheerio.load(await fetchText(pageUrl));
 
-  $("head").prepend(`<script>${bootstrap}</script>`);
+    $("head").prepend(`<script>${bootstrap}</script>`);
 
-  const raw = await Application.executeInWebView({
-    source: { html: $.html(), baseUrl: pageUrl, loadCSS: false, loadImages: false, userAgent },
-    inject: `return window.__comixResult__`,
-    storage: { cookies },
+    const raw = await Application.executeInWebView({
+      source: { html: $.html(), baseUrl: pageUrl, loadCSS: false, loadImages: false, userAgent },
+      inject: `return window.__comixResult__`,
+      storage: { cookies },
+    });
+
+    if (raw.result === undefined || raw.result === null) {
+      throw new Error("Comix WebView returned no result");
+    }
+    return raw.result as T;
   });
-
-  if (raw.result === undefined || raw.result === null) {
-    throw new Error("Comix WebView returned no result");
-  }
-  return raw.result as T;
 }
 
 // Hook `items` assignments, then run `handle(holder)` on the decoded object.
@@ -178,44 +181,46 @@ export async function chapterListViaWebView(
   mangaId: string,
   cookieInterceptor: CookieStorageInterceptor,
 ): Promise<ChapterItem[]> {
-  const cookies = cookieInterceptor.cookiesForUrl(`${DOMAIN}/`);
-  const userAgent = await Application.getDefaultUserAgent();
-  const pageUrl = `${DOMAIN}/title/${mangaId}`;
+  return scheduleComix(async () => {
+    const cookies = cookieInterceptor.cookiesForUrl(`${DOMAIN}/`);
+    const userAgent = await Application.getDefaultUserAgent();
+    const pageUrl = `${DOMAIN}/title/${mangaId}`;
 
-  const $ = cheerio.load(await fetchText(pageUrl));
-  $("head").prepend(`<script>${BOOTSTRAP_AXIOS}</script>`);
+    const $ = cheerio.load(await fetchText(pageUrl));
+    $("head").prepend(`<script>${BOOTSTRAP_AXIOS}</script>`);
 
-  const raw = await Application.executeInWebView({
-    source: { html: $.html(), baseUrl: pageUrl, loadCSS: false, loadImages: false, userAgent },
-    inject: buildChapterListInject(mangaId),
-    storage: { cookies },
-  });
+    const raw = await Application.executeInWebView({
+      source: { html: $.html(), baseUrl: pageUrl, loadCSS: false, loadImages: false, userAgent },
+      inject: buildChapterListInject(mangaId),
+      storage: { cookies },
+    });
 
-  const text = raw.result;
-  if (typeof text !== "string") {
-    throw new Error(`Comix WebView returned unexpected result: ${JSON.stringify(text)}`);
-  }
-  const result = JSON.parse(text) as
-    | { ok: true; items: ChapterItem[] }
-    | { ok: false; status?: number; error: string };
-
-  if (!result.ok) {
-    const status = result.status;
-    console.log(
-      `[Comix] chapter list failed for ${mangaId} (HTTP ${status ?? "?"}): ${result.error}`,
-    );
-    if (status === 403 || status === 404 || status === 429 || status === 503) {
-      throw new CloudflareError({
-        url: DOMAIN,
-        method: "GET",
-        headers: { "user-agent": await Application.getDefaultUserAgent() },
-      });
+    const text = raw.result;
+    if (typeof text !== "string") {
+      throw new Error(`Comix WebView returned unexpected result: ${JSON.stringify(text)}`);
     }
-    throw new Error(`Comix chapter list failed for ${mangaId}: ${result.error}`);
-  }
+    const result = JSON.parse(text) as
+      | { ok: true; items: ChapterItem[] }
+      | { ok: false; status?: number; error: string };
 
-  console.log(`[Comix] chapter list for ${mangaId}: ${result.items.length} chapters`);
-  return result.items;
+    if (!result.ok) {
+      const status = result.status;
+      console.log(
+        `[Comix] chapter list failed for ${mangaId} (HTTP ${status ?? "?"}): ${result.error}`,
+      );
+      if (status === 403 || status === 404 || status === 429 || status === 503) {
+        throw new CloudflareError({
+          url: DOMAIN,
+          method: "GET",
+          headers: { "user-agent": await Application.getDefaultUserAgent() },
+        });
+      }
+      throw new Error(`Comix chapter list failed for ${mangaId}: ${result.error}`);
+    }
+
+    console.log(`[Comix] chapter list for ${mangaId}: ${result.items.length} chapters`);
+    return result.items;
+  });
 }
 
 // `/browse` serves an empty shell and loads its list via an encrypted XHR, so
